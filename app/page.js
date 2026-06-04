@@ -1,6 +1,7 @@
 // app/page.js
 "use client";
 import { saveWord } from "@/lib/storage";
+import { WORD_CATEGORIES, getRandomWord } from "@/lib/wordList";
 import { useCallback, useEffect, useState } from "react";
 
 const difficultyConfig = {
@@ -10,29 +11,73 @@ const difficultyConfig = {
 };
 
 export default function Home() {
-  const [vocab, setVocab]     = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [difficulty, setDiff] = useState("medium");
-  const [seen, setSeen]       = useState(0);
-  const [copied, setCopied]   = useState(false);
-  const [visible, setVisible] = useState(false);
+  const [vocab, setVocab]       = useState(null);
+  const [loading, setLoading]   = useState(false);
+  const [difficulty, setDiff]   = useState("medium");
+  const [seen, setSeen]         = useState(0);
+  const [copied, setCopied]     = useState(false);
+  const [visible, setVisible]   = useState(false);
   const [speaking, setSpeaking] = useState(false);
 
-  const fetchWord = useCallback(async (diff) => {
-    const d = diff || difficulty;
-    setLoading(true); setVisible(false);
+  const [useLocal, setUseLocal] = useState(() => {
+    if (typeof window !== "undefined")
+      return localStorage.getItem("use_local_dict") === "true";
+    return false;
+  });
+
+  const [category, setCategory] = useState(() => {
+    if (typeof window !== "undefined")
+      return localStorage.getItem("word_category") || "everyday";
+    return "everyday";
+  });
+  const fetchWord = useCallback(async (diff, localMode, cat) => {
+    const d = diff ?? difficulty;
+    const lm = localMode ?? useLocal;
+    const c = cat ?? category;
+
+    setLoading(true);
+    setVisible(false);
+
     window.speechSynthesis?.cancel();
-    try{ 
-      const history = JSON.parse(localStorage.getItem("vocab_history") || "[]");
-      const seenWords = history.map(w => w.word?.toLowerCase()).filter(Boolean);
-      const res = await fetch(`/api/vocabulary?difficulty=${d}&t=${Date.now()}&seen=${encodeURIComponent(JSON.stringify(seenWords.slice(0, 50)))}`);
+
+    try {
+      const history = JSON.parse(
+        localStorage.getItem("vocab_history") || "[]"
+      );
+
+      const seenWords = history
+        .map(w => w.word?.toLowerCase())
+        .filter(Boolean);
+
+      let url = `/api/vocabulary?difficulty=${d}&t=${Date.now()}`;
+
+      if (lm) {
+        const word = getRandomWord(c, d, seenWords);
+
+        url += `&word=${encodeURIComponent(word)}&mode=local`;
+      } else {
+        url += `&mode=ai&seen=${encodeURIComponent(
+          JSON.stringify(seenWords.slice(0, 50))
+        )}`;
+      }
+
+      const res = await fetch(url);
       const data = await res.json();
-      if (!data.error) { saveWord(data); setSeen(s => s + 1); }
+
+      if (!data.error) {
+        saveWord(data);
+        setSeen(s => s + 1);
+      }
+
       setVocab(data);
+
       setTimeout(() => setVisible(true), 60);
-    } catch { setVocab({ error: "Network error. Try again." }); }
+    } catch {
+      setVocab({ error: "Network error. Try again." });
+    }
+
     setLoading(false);
-  }, [difficulty]);
+  }, [difficulty, useLocal, category]);
 
   useEffect(() => { fetchWord("medium"); }, []);
 
@@ -129,7 +174,97 @@ export default function Home() {
           </button>
         ))}
       </div>
+      {/* ── Local Dictionary Mode Toggle ── */}
+<div style={{
+  background:"var(--surface)",
+  border:"1px solid var(--border)",
+  borderRadius:16,
+  padding:"16px 20px",
+  marginBottom:24
+}}>
+  <div style={{
+    display:"flex",
+    alignItems:"center",
+    justifyContent:"space-between",
+    marginBottom: useLocal ? 16 : 0
+  }}>
+    <div>
+      <p style={{
+        fontSize:14,
+        fontWeight:600,
+        color:"var(--text)"
+      }}>
+        📖 Local Dictionary Mode
+      </p>
 
+      <p style={{
+        fontSize:12,
+        color:"var(--muted)",
+        marginTop:2
+      }}>
+        {useLocal
+          ? `Category: ${WORD_CATEGORIES[category]?.label}`
+          : "AI picks the word freely"}
+      </p>
+    </div>
+
+    <div
+      onClick={handleToggleLocal}
+      style={{
+        width:52,
+        height:28,
+        borderRadius:14,
+        cursor:"pointer",
+        position:"relative",
+        background: useLocal
+          ? "var(--accent)"
+          : "var(--border)"
+      }}
+    >
+      <div
+        style={{
+          position:"absolute",
+          top:3,
+          left: useLocal ? 27 : 3,
+          width:22,
+          height:22,
+          borderRadius:"50%",
+          background:"white"
+        }}
+      />
+    </div>
+  </div>
+
+  {useLocal && (
+    <>
+      <p style={{
+        fontSize:11,
+        color:"var(--muted)",
+        letterSpacing:2,
+        textTransform:"uppercase",
+        marginBottom:8
+      }}>
+        Category
+      </p>
+
+      <div style={{
+        display:"flex",
+        gap:8,
+        flexWrap:"wrap",
+        marginBottom:14
+      }}>
+        {Object.entries(WORD_CATEGORIES).map(([key,val]) => (
+          <button
+            key={key}
+            onClick={() => handleCategory(key)}
+          >
+            {val.label}
+          </button>
+        ))}
+      </div>
+    </>
+  )}
+</div>
       {/* Card */}
       <div style={{
         background:"var(--card)", borderRadius:20, border:"1px solid var(--border)",

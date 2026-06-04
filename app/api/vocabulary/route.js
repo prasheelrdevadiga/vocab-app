@@ -12,6 +12,8 @@ const DIFFICULTY_PROMPTS = {
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const difficulty = searchParams.get("difficulty") || "medium";
+  const mode = searchParams.get("mode") || "ai";
+  const localWord = searchParams.get("word");
   const difficultyHint = DIFFICULTY_PROMPTS[difficulty] || DIFFICULTY_PROMPTS.medium;
 
   let seenWords = [];
@@ -23,7 +25,29 @@ export async function GET(request) {
     ? `\n\nIMPORTANT: Do NOT use any of these words that the user has already seen: ${seenWords.join(", ")}. Pick a completely different word.`
     : "";
 
-  const prompt = `Give me a completely random ${difficultyHint}. Pick a different word every time.${avoidClause}
+  const prompt = mode === "local" && localWord
+  ? `Give me detailed vocabulary information for the English word "${localWord}".
+
+Respond ONLY in this exact JSON format:
+{
+  "word":"${localWord}",
+  "pronunciation":"/pronunciation/",
+  "partOfSpeech":"noun",
+  "difficulty":"${difficulty}",
+  "meaning":"Clear detailed definition in 2-3 sentences.",
+  "explanation":"Thorough explanation.",
+  "examples":[
+    "Example 1",
+    "Example 2",
+    "Example 3",
+    "Example 4",
+    "Example 5",
+    "Example 6"
+  ],
+  "synonyms":["word1","word2","word3"],
+  "antonyms":["word1","word2"]
+}`
+  : `Give me a completely random ${difficultyHint}. Pick a different word every time.${avoidClause}
 
 Respond ONLY in this exact JSON format with no extra text before or after:
 {
