@@ -14,7 +14,16 @@ export async function GET(request) {
   const difficulty = searchParams.get("difficulty") || "medium";
   const difficultyHint = DIFFICULTY_PROMPTS[difficulty] || DIFFICULTY_PROMPTS.medium;
 
-  const prompt = `Give me a completely random ${difficultyHint}. Pick a different word every time.
+  let seenWords = [];
+  try {
+    seenWords = JSON.parse(searchParams.get("seen") || "[]");
+  } catch {}
+
+  const avoidClause = seenWords.length > 0
+    ? `\n\nIMPORTANT: Do NOT use any of these words that the user has already seen: ${seenWords.join(", ")}. Pick a completely different word.`
+    : "";
+
+  const prompt = `Give me a completely random ${difficultyHint}. Pick a different word every time.${avoidClause}
 
 Respond ONLY in this exact JSON format with no extra text before or after:
 {

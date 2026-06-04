@@ -22,8 +22,10 @@ export default function Home() {
     const d = diff || difficulty;
     setLoading(true); setVisible(false);
     window.speechSynthesis?.cancel();
-    try {
-      const res  = await fetch(`/api/vocabulary?difficulty=${d}&t=${Date.now()}`);
+    try{ 
+      const history = JSON.parse(localStorage.getItem("vocab_history") || "[]");
+      const seenWords = history.map(w => w.word?.toLowerCase()).filter(Boolean);
+      const res = await fetch(`/api/vocabulary?difficulty=${d}&t=${Date.now()}&seen=${encodeURIComponent(JSON.stringify(seenWords.slice(0, 50)))}`);
       const data = await res.json();
       if (!data.error) { saveWord(data); setSeen(s => s + 1); }
       setVocab(data);
