@@ -95,6 +95,29 @@ export default function Home() {
     );
     setCopied(true); setTimeout(() => setCopied(false), 2000);
   };
+  const handleToggleLocal = () => {
+    const next = !useLocal;
+
+    setUseLocal(next);
+
+    localStorage.setItem(
+      "use_local_dict",
+      String(next)
+    );
+
+    fetchWord(null, next, null);
+  };
+
+  const handleCategory = (c) => {
+    setCategory(c);
+
+    localStorage.setItem(
+      "word_category",
+      c
+    );
+
+    fetchWord(null, null, c);
+  };
 
   const handlePDF = () => {
     if (!vocab?.word) return;
