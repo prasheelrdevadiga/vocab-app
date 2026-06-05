@@ -1,6 +1,6 @@
 // app/page.js
 "use client";
-import { saveWord } from "@/lib/storage";
+import { saveWord, getSeenWords, loadCategory, saveCategory } from "@/lib/userStorage";
 import { WORD_CATEGORIES, getNextWord } from "@/lib/wordList";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
@@ -14,17 +14,13 @@ export default function Home() {
   const [speaking, setSpeaking] = useState(false);
   const [studiedInCategory, setStudiedInCategory] = useState(0);
   const [totalInCategory, setTotalInCategory]     = useState(0);
+  const [hasCustomList, setHasCustomList]         = useState(false);
 
-  const [category, setCategory] = useState(() => {
-    if (typeof window !== "undefined")
-      return localStorage.getItem("word_category") || "everyday";
-    return "everyday";
-  });
+  const [category, setCategory] = useState("everyday");
 
   // ── Calculate progress for current category ──
-  const calcStudied = useCallback((cat) => {
-    const history   = JSON.parse(localStorage.getItem("vocab_history") || "[]");
-    const seenWords = history.map(w => w.word?.toLowerCase()).filter(Boolean);
+  const calcStudied = useCallback(async (cat) => {
+    const seenWords = await getSeenWords();
 
     if (cat === "custom") {
       const customList = JSON.parse(localStorage.getItem("custom_word_list") || "[]");
@@ -45,8 +41,7 @@ export default function Home() {
     window.speechSynthesis?.cancel();
 
     try {
-      const history   = JSON.parse(localStorage.getItem("vocab_history") || "[]");
-      const seenWords = history.map(w => w.word?.toLowerCase()).filter(Boolean);
+      const seenWords = await getSeenWords();
 
       let word = null;
 
@@ -74,9 +69,9 @@ export default function Home() {
       const data = await res.json();
 
       if (!data.error) {
-        saveWord(data);
+        await saveWord(data, c);
         setSeen(s => s + 1);
-        calcStudied(c);
+        await calcStudied(c);
       }
 
       setVocab(data);
@@ -88,17 +83,24 @@ export default function Home() {
     setLoading(false);
   }, [category, calcStudied]);
 
+  // ── On mount: load saved category from Supabase/localStorage ──
   useEffect(() => {
-    calcStudied(category);
-    fetchWord(category);
+    loadCategory().then(cat => {
+      setCategory(cat);
+      calcStudied(cat);
+      fetchWord(cat);
+    });
+    // Check if custom list exists
+    const customList = JSON.parse(localStorage.getItem("custom_word_list") || "[]");
+    setHasCustomList(customList.length > 0);
   }, []);
 
   useEffect(() => { return () => window.speechSynthesis?.cancel(); }, []);
 
-  const handleCategory = (c) => {
+  const handleCategory = async (c) => {
     setCategory(c);
-    localStorage.setItem("word_category", c);
-    calcStudied(c);
+    await saveCategory(c);
+    await calcStudied(c);
     fetchWord(c);
   };
 
@@ -144,11 +146,6 @@ export default function Home() {
     window.speechSynthesis?.getVoices();
     window.speechSynthesis?.addEventListener("voiceschanged", () => window.speechSynthesis.getVoices());
   }, []);
-
-  // Check if user has a custom list saved
-  const hasCustomList = typeof window !== "undefined"
-    ? JSON.parse(localStorage.getItem("custom_word_list") || "[]").length > 0
-    : false;
 
   const accentColor = "#ff6b35";
 

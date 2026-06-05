@@ -2,6 +2,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { saveCustomList, loadCustomList } from "@/lib/userStorage";
 
 export default function WordListPage() {
   const [inputText, setInputText]   = useState("");
@@ -10,9 +11,8 @@ export default function WordListPage() {
   const [previewWords, setPreviewWords] = useState([]);
 
   useEffect(() => {
-    const stored = JSON.parse(localStorage.getItem("custom_word_list") || "[]");
-    setSavedList(stored);
-  }, []);
+  loadCustomList().then(list => setSavedList(list));
+}, []);
 
   const parseWords = (text) => {
     return text
@@ -26,7 +26,7 @@ export default function WordListPage() {
     setPreviewWords(words);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const newWords = parseWords(inputText);
     if (newWords.length === 0) {
       setMessage("⚠️ No valid words found. Make sure words are separated by commas.");
@@ -34,7 +34,7 @@ export default function WordListPage() {
     }
     // Merge with existing, no duplicates
     const merged = [...new Set([...savedList, ...newWords])];
-    localStorage.setItem("custom_word_list", JSON.stringify(merged));
+    await saveCustomList(merged);
     setSavedList(merged);
     setInputText("");
     setPreviewWords([]);
