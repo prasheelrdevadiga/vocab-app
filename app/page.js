@@ -1,122 +1,114 @@
 // app/page.js
 "use client";
 import { saveWord } from "@/lib/storage";
-import { WORD_CATEGORIES, getRandomWord } from "@/lib/wordList";
+import { WORD_CATEGORIES, getNextWord } from "@/lib/wordList";
 import { useCallback, useEffect, useState } from "react";
-
-const difficultyConfig = {
-  easy:     { label: "Easy",     color: "#06d6a0", desc: "Everyday words" },
-  medium:   { label: "Medium",   color: "#f7c59f", desc: "Intermediate"   },
-  advanced: { label: "Advanced", color: "#ef476f", desc: "Sophisticated"  },
-};
+import Link from "next/link";
 
 export default function Home() {
   const [vocab, setVocab]       = useState(null);
   const [loading, setLoading]   = useState(false);
-  const [difficulty, setDiff]   = useState("medium");
   const [seen, setSeen]         = useState(0);
   const [copied, setCopied]     = useState(false);
   const [visible, setVisible]   = useState(false);
   const [speaking, setSpeaking] = useState(false);
-
-  const [useLocal, setUseLocal] = useState(() => {
-    if (typeof window !== "undefined")
-      return localStorage.getItem("use_local_dict") === "true";
-    return false;
-  });
+  const [studiedInCategory, setStudiedInCategory] = useState(0);
+  const [totalInCategory, setTotalInCategory]     = useState(0);
 
   const [category, setCategory] = useState(() => {
     if (typeof window !== "undefined")
       return localStorage.getItem("word_category") || "everyday";
     return "everyday";
   });
-  const fetchWord = useCallback(async (diff, localMode, cat) => {
-    const d = diff ?? difficulty;
-    const lm = localMode ?? useLocal;
-    const c = cat ?? category;
 
+  // ── Calculate progress for current category ──
+  const calcStudied = useCallback((cat) => {
+    const history   = JSON.parse(localStorage.getItem("vocab_history") || "[]");
+    const seenWords = history.map(w => w.word?.toLowerCase()).filter(Boolean);
+
+    if (cat === "custom") {
+      const customList = JSON.parse(localStorage.getItem("custom_word_list") || "[]");
+      setTotalInCategory(customList.length);
+      setStudiedInCategory(customList.filter(w => seenWords.includes(w.toLowerCase())).length);
+    } else {
+      const words = WORD_CATEGORIES[cat]?.words || [];
+      setTotalInCategory(words.length);
+      setStudiedInCategory(words.filter(w => seenWords.includes(w.toLowerCase())).length);
+    }
+  }, []);
+
+  // ── Fetch & explain a word from local list ──
+  const fetchWord = useCallback(async (cat) => {
+    const c = cat ?? category;
     setLoading(true);
     setVisible(false);
-
     window.speechSynthesis?.cancel();
 
     try {
-      const history = JSON.parse(
-        localStorage.getItem("vocab_history") || "[]"
-      );
+      const history   = JSON.parse(localStorage.getItem("vocab_history") || "[]");
+      const seenWords = history.map(w => w.word?.toLowerCase()).filter(Boolean);
 
-      const seenWords = history
-        .map(w => w.word?.toLowerCase())
-        .filter(Boolean);
+      let word = null;
 
-      let url = `/api/vocabulary?difficulty=${d}&t=${Date.now()}`;
-
-      if (lm) {
-        const word = getRandomWord(c, d, seenWords);
-
-        url += `&word=${encodeURIComponent(word)}&mode=local`;
+      if (c === "custom") {
+        const customList = JSON.parse(localStorage.getItem("custom_word_list") || "[]");
+        const unseen = customList.filter(w => !seenWords.includes(w.toLowerCase()));
+        if (unseen.length === 0) {
+          setVocab({ error: "🎉 You've studied all words in your custom list! Add more words in My List page, or clear your history." });
+          setLoading(false);
+          setVisible(true);
+          return;
+        }
+        word = unseen[Math.floor(Math.random() * unseen.length)];
       } else {
-        url += `&mode=ai&seen=${encodeURIComponent(
-          JSON.stringify(seenWords.slice(0, 50))
-        )}`;
+        word = getNextWord(c, seenWords);
+        if (!word) {
+          setVocab({ error: `🎉 You've studied all words in ${WORD_CATEGORIES[c]?.label}! Switch to another category or clear your history.` });
+          setLoading(false);
+          setVisible(true);
+          return;
+        }
       }
 
-      const res = await fetch(url);
+      const res  = await fetch(`/api/vocabulary?word=${encodeURIComponent(word)}&t=${Date.now()}`);
       const data = await res.json();
 
       if (!data.error) {
         saveWord(data);
         setSeen(s => s + 1);
+        calcStudied(c);
       }
 
       setVocab(data);
-
       setTimeout(() => setVisible(true), 60);
     } catch {
       setVocab({ error: "Network error. Try again." });
     }
 
     setLoading(false);
-  }, [difficulty, useLocal, category]);
+  }, [category, calcStudied]);
 
-  useEffect(() => { fetchWord("medium"); }, []);
-
-  // ── Stop speech when page unloads ──
   useEffect(() => {
-    return () => window.speechSynthesis?.cancel();
+    calcStudied(category);
+    fetchWord(category);
   }, []);
 
-  const handleDiff = (d) => { setDiff(d); fetchWord(d); };
+  useEffect(() => { return () => window.speechSynthesis?.cancel(); }, []);
+
+  const handleCategory = (c) => {
+    setCategory(c);
+    localStorage.setItem("word_category", c);
+    calcStudied(c);
+    fetchWord(c);
+  };
 
   const handleCopy = () => {
     if (!vocab?.word) return;
     navigator.clipboard.writeText(
       `Word: ${vocab.word}\nMeaning: ${vocab.meaning}\n\nExamples:\n${vocab.examples?.join("\n")}`
     );
-    setCopied(true); setTimeout(() => setCopied(false), 2000);
-  };
-  const handleToggleLocal = () => {
-    const next = !useLocal;
-
-    setUseLocal(next);
-
-    localStorage.setItem(
-      "use_local_dict",
-      String(next)
-    );
-
-    fetchWord(null, next, null);
-  };
-
-  const handleCategory = (c) => {
-    setCategory(c);
-
-    localStorage.setItem(
-      "word_category",
-      c
-    );
-
-    fetchWord(null, null, c);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const handlePDF = () => {
@@ -127,49 +119,42 @@ export default function Home() {
     win.print();
   };
 
-  // ── Text-to-Speech ──
   const speak = (text) => {
     if (!text) return;
     window.speechSynthesis.cancel();
-
-    // Speak the word first, then its pronunciation guide
     const fullText = vocab?.pronunciation
       ? `${text}. Pronunciation: ${vocab.pronunciation}`
       : text;
-
-    const utter = new SpeechSynthesisUtterance(fullText);
-    utter.lang  = "en-US";
-    utter.rate  = 0.75;  // slower = clearer
-    utter.pitch = 1;
-
-    utter.onstart = () => setSpeaking(true);
-    utter.onend   = () => setSpeaking(false);
-    utter.onerror = () => setSpeaking(false);
-
-    // Pick a good English voice if available
-    const voices = window.speechSynthesis.getVoices();
-    const englishVoice = voices.find(v =>
-      v.lang.startsWith("en") && v.name.toLowerCase().includes("female")
-    ) || voices.find(v => v.lang.startsWith("en-US"))
-      || voices.find(v => v.lang.startsWith("en"));
-    if (englishVoice) utter.voice = englishVoice;
-
+    const utter    = new SpeechSynthesisUtterance(fullText);
+    utter.lang     = "en-US";
+    utter.rate     = 0.75;
+    utter.pitch    = 1;
+    utter.onstart  = () => setSpeaking(true);
+    utter.onend    = () => setSpeaking(false);
+    utter.onerror  = () => setSpeaking(false);
+    const voices   = window.speechSynthesis.getVoices();
+    const v = voices.find(v => v.lang.startsWith("en") && v.name.toLowerCase().includes("female"))
+           || voices.find(v => v.lang.startsWith("en-US"))
+           || voices.find(v => v.lang.startsWith("en"));
+    if (v) utter.voice = v;
     window.speechSynthesis.speak(utter);
   };
 
-  // Chrome bug fix — voices load async
   useEffect(() => {
     window.speechSynthesis?.getVoices();
-    window.speechSynthesis?.addEventListener("voiceschanged", () => {
-      window.speechSynthesis.getVoices();
-    });
+    window.speechSynthesis?.addEventListener("voiceschanged", () => window.speechSynthesis.getVoices());
   }, []);
 
-  const cfg = difficultyConfig[difficulty];
+  // Check if user has a custom list saved
+  const hasCustomList = typeof window !== "undefined"
+    ? JSON.parse(localStorage.getItem("custom_word_list") || "[]").length > 0
+    : false;
+
+  const accentColor = "#ff6b35";
 
   return (
     <div>
-      {/* Header */}
+      {/* ── Header ── */}
       <div style={{ textAlign:"center", marginBottom:32 }}>
         <div style={{ fontSize:12, letterSpacing:4, color:"var(--muted)", textTransform:"uppercase", marginBottom:6 }}>
           Daily Vocabulary
@@ -178,117 +163,94 @@ export default function Home() {
           Word<span style={{ color:"var(--accent)" }}>Smith</span>
         </h1>
         <p style={{ color:"var(--muted)", fontSize:13, marginTop:6 }}>
-          {seen > 0 ? `${seen} word${seen>1?"s":""} explored` : "Expand your vocabulary, one word at a time"}
+          {seen > 0 ? `${seen} word${seen > 1 ? "s" : ""} explored this session` : "Expand your vocabulary, one word at a time"}
         </p>
       </div>
 
-      {/* Difficulty Selector */}
+      {/* ── Nav Links ── */}
       <div style={{ display:"flex", gap:10, justifyContent:"center", marginBottom:28, flexWrap:"wrap" }}>
-        {Object.entries(difficultyConfig).map(([key, val]) => (
-          <button key={key} onClick={() => handleDiff(key)} style={{
-            padding:"9px 22px", borderRadius:50, cursor:"pointer",
-            border:`2px solid ${difficulty===key ? val.color : "var(--border)"}`,
-            background: difficulty===key ? val.color+"22" : "var(--surface)",
-            color: difficulty===key ? val.color : "var(--muted)",
-            fontWeight: difficulty===key ? 700 : 400, fontSize:14,
-            fontFamily:"'DM Sans',sans-serif", transition:"all 0.2s",
+        {[
+          { href:"/history",  label:"📜 History"  },
+          { href:"/practice", label:"🧠 Practice"  },
+          { href:"/wordlist", label:"📝 My List"   },
+        ].map(({ href, label }) => (
+          <Link key={href} href={href} style={{
+            padding:"8px 18px", borderRadius:50,
+            border:"1px solid var(--border)",
+            background:"var(--surface)",
+            color:"var(--muted)",
+            textDecoration:"none", fontSize:13, fontWeight:500,
+            fontFamily:"'DM Sans',sans-serif",
           }}>
-            {val.label} <span style={{ fontSize:11, opacity:0.7 }}>{val.desc}</span>
-          </button>
+            {label}
+          </Link>
         ))}
       </div>
-      {/* ── Local Dictionary Mode Toggle ── */}
-<div style={{
-  background:"var(--surface)",
-  border:"1px solid var(--border)",
-  borderRadius:16,
-  padding:"16px 20px",
-  marginBottom:24
-}}>
-  <div style={{
-    display:"flex",
-    alignItems:"center",
-    justifyContent:"space-between",
-    marginBottom: useLocal ? 16 : 0
-  }}>
-    <div>
-      <p style={{
-        fontSize:14,
-        fontWeight:600,
-        color:"var(--text)"
-      }}>
-        📖 Local Dictionary Mode
-      </p>
 
-      <p style={{
-        fontSize:12,
-        color:"var(--muted)",
-        marginTop:2
-      }}>
-        {useLocal
-          ? `Category: ${WORD_CATEGORIES[category]?.label}`
-          : "AI picks the word freely"}
-      </p>
-    </div>
-
-    <div
-      onClick={handleToggleLocal}
-      style={{
-        width:52,
-        height:28,
-        borderRadius:14,
-        cursor:"pointer",
-        position:"relative",
-        background: useLocal
-          ? "var(--accent)"
-          : "var(--border)"
-      }}
-    >
-      <div
-        style={{
-          position:"absolute",
-          top:3,
-          left: useLocal ? 27 : 3,
-          width:22,
-          height:22,
-          borderRadius:"50%",
-          background:"white"
-        }}
-      />
-    </div>
-  </div>
-
-  {useLocal && (
-    <>
-      <p style={{
-        fontSize:11,
-        color:"var(--muted)",
-        letterSpacing:2,
-        textTransform:"uppercase",
-        marginBottom:8
-      }}>
-        Category
-      </p>
-
+      {/* ── Category Selector + Progress ── */}
       <div style={{
-        display:"flex",
-        gap:8,
-        flexWrap:"wrap",
-        marginBottom:14
+        background:"var(--surface)", border:"1px solid var(--border)",
+        borderRadius:16, padding:"16px 20px", marginBottom:24,
       }}>
-        {Object.entries(WORD_CATEGORIES).map(([key,val]) => (
-          <button
-            key={key}
-            onClick={() => handleCategory(key)}
-          >
-            {val.label}
-          </button>
-        ))}
+        {/* Progress bar */}
+        <div style={{ marginBottom:16 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+            <span style={{ fontSize:13, fontWeight:600, color:"var(--text)" }}>📚 Words Studied</span>
+            <span style={{ fontSize:13, color:"var(--accent)", fontWeight:700 }}>
+              {studiedInCategory} / {totalInCategory}
+            </span>
+          </div>
+          <div style={{ height:8, borderRadius:8, background:"var(--border)", overflow:"hidden" }}>
+            <div style={{
+              height:"100%", borderRadius:8, background:"var(--accent)",
+              width: totalInCategory > 0
+                ? `${Math.round((studiedInCategory / totalInCategory) * 100)}%`
+                : "0%",
+              transition:"width 0.5s ease",
+            }} />
+          </div>
+          <p style={{ fontSize:11, color:"var(--muted)", marginTop:4 }}>
+            {totalInCategory > 0
+              ? `${Math.round((studiedInCategory / totalInCategory) * 100)}% complete · ${totalInCategory - studiedInCategory} words remaining`
+              : "No words in this list yet — go to My List to add some"}
+          </p>
+        </div>
+
+        {/* Category buttons */}
+        <p style={{ fontSize:11, color:"var(--muted)", letterSpacing:2, textTransform:"uppercase", marginBottom:8 }}>
+          Choose Category
+        </p>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          {Object.entries(WORD_CATEGORIES).map(([key, val]) => (
+            <button key={key} onClick={() => handleCategory(key)} style={{
+              padding:"7px 14px", borderRadius:50, cursor:"pointer", fontSize:13,
+              border:`1.5px solid ${category === key ? "var(--accent)" : "var(--border)"}`,
+              background: category === key ? "var(--accent)22" : "var(--card)",
+              color: category === key ? "var(--accent)" : "var(--muted)",
+              fontWeight: category === key ? 700 : 400,
+              fontFamily:"'DM Sans',sans-serif", transition:"all 0.2s",
+            }}>
+              {val.label}
+            </button>
+          ))}
+
+          {/* My List button — only if user has added custom words */}
+          {hasCustomList && (
+            <button onClick={() => handleCategory("custom")} style={{
+              padding:"7px 14px", borderRadius:50, cursor:"pointer", fontSize:13,
+              border:`1.5px solid ${category === "custom" ? "#a78bfa" : "var(--border)"}`,
+              background: category === "custom" ? "#a78bfa22" : "var(--card)",
+              color: category === "custom" ? "#a78bfa" : "var(--muted)",
+              fontWeight: category === "custom" ? 700 : 400,
+              fontFamily:"'DM Sans',sans-serif", transition:"all 0.2s",
+            }}>
+              📝 My List
+            </button>
+          )}
+        </div>
       </div>
-    </>
-  )}
-</div>
-      {/* Card */}
+
+      {/* ── Word Card ── */}
       <div style={{
         background:"var(--card)", borderRadius:20, border:"1px solid var(--border)",
         minHeight:400, overflow:"hidden",
@@ -296,7 +258,7 @@ export default function Home() {
         transform: visible ? "translateY(0)" : "translateY(12px)",
         transition:"opacity 0.4s, transform 0.4s",
       }}>
-        {loading && <Spinner color={cfg.color} />}
+        {loading && <Spinner color={accentColor} />}
 
         {!loading && vocab && !vocab.error && (
           <>
@@ -304,18 +266,26 @@ export default function Home() {
             <div style={{
               padding:"28px 28px 20px",
               borderBottom:"1px solid var(--border)",
-              background:`linear-gradient(135deg,${cfg.color}11,transparent)`,
+              background:`linear-gradient(135deg,${accentColor}11,transparent)`,
             }}>
               <div style={{ display:"flex", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
                 <div>
-                  <span style={{ fontSize:11, letterSpacing:3, textTransform:"uppercase", color:cfg.color, fontWeight:600, display:"block", marginBottom:6 }}>
-                    {vocab.partOfSpeech} · {difficulty}
+                  <span style={{
+                    fontSize:11, letterSpacing:3, textTransform:"uppercase",
+                    color:accentColor, fontWeight:600, display:"block", marginBottom:6,
+                  }}>
+                    {vocab.partOfSpeech}
                   </span>
-                  <h2 style={{ fontFamily:"'Playfair Display',serif", fontSize:"clamp(2rem,7vw,3.2rem)", fontWeight:900, lineHeight:1 }}>
+                  <h2 style={{
+                    fontFamily:"'Playfair Display',serif",
+                    fontSize:"clamp(2rem,7vw,3.2rem)", fontWeight:900, lineHeight:1,
+                  }}>
                     {vocab.word}
                   </h2>
                   {vocab.pronunciation && (
-                    <p style={{ color:"var(--muted)", fontSize:14, marginTop:5, fontStyle:"italic" }}>{vocab.pronunciation}</p>
+                    <p style={{ color:"var(--muted)", fontSize:14, marginTop:5, fontStyle:"italic" }}>
+                      {vocab.pronunciation}
+                    </p>
                   )}
                 </div>
 
@@ -325,7 +295,6 @@ export default function Home() {
                     {copied ? "✓ Copied" : "Copy"}
                   </SmallBtn>
 
-                  {/* 🔊 Listen Button */}
                   <button
                     onClick={() => speak(vocab.word)}
                     style={{
@@ -333,20 +302,18 @@ export default function Home() {
                       fontFamily:"'DM Sans',sans-serif", transition:"all 0.2s",
                       border: speaking ? "1px solid #60a5fa" : "1px solid var(--border)",
                       background: speaking ? "#60a5fa22" : "var(--surface)",
-                      color: speaking ? "#60a5fa" : "#60a5fa",
+                      color:"#60a5fa",
                       display:"flex", alignItems:"center", gap:5,
                     }}
                   >
                     {speaking ? (
                       <>
                         <span style={{ display:"inline-flex", gap:2, alignItems:"center" }}>
-                          {/* animated sound bars */}
-                          {[1,2,3].map(i => (
+                          {[1, 2, 3].map(i => (
                             <span key={i} style={{
                               display:"inline-block", width:3, borderRadius:2,
-                              background:"#60a5fa",
-                              height: `${6 + i * 3}px`,
-                              animation:`soundBar 0.6s ease-in-out ${i*0.15}s infinite alternate`,
+                              background:"#60a5fa", height:`${6 + i * 3}px`,
+                              animation:`soundBar 0.6s ease-in-out ${i * 0.15}s infinite alternate`,
                             }} />
                           ))}
                         </span>
@@ -362,48 +329,59 @@ export default function Home() {
 
             {/* Card Body */}
             <div style={{ padding:"24px 28px" }}>
-              <Section title="Meaning" accent={cfg.color}>
+              <Section title="Meaning" accent={accentColor}>
                 <p style={{ lineHeight:1.7, fontSize:16 }}>{vocab.meaning}</p>
               </Section>
-              <Section title="Detailed Explanation" accent={cfg.color}>
+              <Section title="Detailed Explanation" accent={accentColor}>
                 <p style={{ color:"#c8c9d9", lineHeight:1.8, fontSize:15 }}>{vocab.explanation}</p>
               </Section>
-              <Section title="Examples" accent={cfg.color}>
+              <Section title="Examples" accent={accentColor}>
                 <ol style={{ listStyle:"none", display:"flex", flexDirection:"column", gap:10 }}>
                   {vocab.examples?.map((ex, i) => (
                     <li key={i} style={{ display:"flex", gap:10, alignItems:"flex-start" }}>
-                      <span style={{ minWidth:24, height:24, borderRadius:"50%", background:cfg.color+"22", color:cfg.color, fontSize:12, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center", marginTop:2 }}>{i+1}</span>
+                      <span style={{
+                        minWidth:24, height:24, borderRadius:"50%",
+                        background:accentColor + "22", color:accentColor,
+                        fontSize:12, fontWeight:700,
+                        display:"flex", alignItems:"center", justifyContent:"center", marginTop:2,
+                      }}>{i + 1}</span>
                       <p style={{ color:"#b0b2c8", lineHeight:1.65, fontSize:15 }}>{ex}</p>
                     </li>
                   ))}
                 </ol>
               </Section>
               <div style={{ display:"flex", gap:20, flexWrap:"wrap" }}>
-                <TagGroup label="Synonyms" items={vocab.synonyms} color={cfg.color} />
+                <TagGroup label="Synonyms" items={vocab.synonyms} color={accentColor} />
                 <TagGroup label="Antonyms" items={vocab.antonyms} color="#ef476f" />
               </div>
             </div>
           </>
         )}
+
         {!loading && vocab?.error && <ErrorMsg msg={vocab.error} />}
       </div>
 
-      {/* Next Button */}
+      {/* ── Next Word Button ── */}
       <div style={{ textAlign:"center", marginTop:24 }}>
-        <button onClick={() => fetchWord()} disabled={loading} style={{
-          padding:"15px 48px", borderRadius:50, border:"none",
-          background: loading ? "var(--border)" : `linear-gradient(135deg,${cfg.color},${cfg.color}bb)`,
-          color: loading ? "var(--muted)" : "#0f0e17",
-          fontSize:16, fontWeight:700, fontFamily:"'DM Sans',sans-serif",
-          cursor: loading ? "not-allowed" : "pointer",
-          boxShadow: loading ? "none" : `0 8px 28px ${cfg.color}44`,
-          transition:"all 0.2s",
-        }}>
+        <button
+          onClick={() => fetchWord()}
+          disabled={loading}
+          style={{
+            padding:"15px 48px", borderRadius:50, border:"none",
+            background: loading
+              ? "var(--border)"
+              : `linear-gradient(135deg,${accentColor},${accentColor}bb)`,
+            color: loading ? "var(--muted)" : "#0f0e17",
+            fontSize:16, fontWeight:700, fontFamily:"'DM Sans',sans-serif",
+            cursor: loading ? "not-allowed" : "pointer",
+            boxShadow: loading ? "none" : `0 8px 28px ${accentColor}44`,
+            transition:"all 0.2s",
+          }}
+        >
           {loading ? "Loading…" : "Next Word →"}
         </button>
       </div>
 
-      {/* Sound bar animation */}
       <style>{`
         @keyframes soundBar {
           from { transform: scaleY(0.4); }
@@ -414,7 +392,7 @@ export default function Home() {
   );
 }
 
-// ─── Shared Small Components ─────────────────────────────────────────────
+// ─── Small Reusable Components ────────────────────────────────────────────
 function SmallBtn({ onClick, color, children }) {
   return (
     <button onClick={onClick} style={{
@@ -443,7 +421,7 @@ function TagGroup({ label, items, color }) {
     <div style={{ flex:1, minWidth:140 }}>
       <p style={{ fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6 }}>{label}</p>
       <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
-        {items.map((s,i) => (
+        {items.map((s, i) => (
           <span key={i} style={{ padding:"4px 12px", borderRadius:20, background:color+"18", color, fontSize:13 }}>{s}</span>
         ))}
       </div>
@@ -454,8 +432,13 @@ function TagGroup({ label, items, color }) {
 function Spinner({ color }) {
   return (
     <div style={{ padding:80, textAlign:"center" }}>
-      <div style={{ width:44, height:44, borderRadius:"50%", border:"3px solid var(--border)", borderTop:`3px solid ${color}`, animation:"spin 0.8s linear infinite", margin:"0 auto 14px" }} />
-      <p style={{ color:"var(--muted)", fontSize:14 }}>Finding a great word…</p>
+      <div style={{
+        width:44, height:44, borderRadius:"50%",
+        border:"3px solid var(--border)", borderTop:`3px solid ${color}`,
+        animation:"spin 0.8s linear infinite", margin:"0 auto 14px",
+      }} />
+      <p style={{ color:"var(--muted)", fontSize:14 }}>Fetching your word…</p>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
@@ -463,8 +446,10 @@ function Spinner({ color }) {
 function ErrorMsg({ msg }) {
   return (
     <div style={{ padding:60, textAlign:"center", color:"var(--muted)" }}>
-      <p style={{ fontSize:36, marginBottom:10 }}>⚠️</p>
-      <p>{msg}</p>
+      <p style={{ fontSize:36, marginBottom:10 }}>
+        {msg.startsWith("🎉") ? "🎉" : "⚠️"}
+      </p>
+      <p>{msg.replace(/^🎉|^⚠️/, "").trim()}</p>
     </div>
   );
 }
@@ -491,15 +476,15 @@ export function generatePDFHTML(words) {
   ${words.map(w => `
     <div class="word-card">
       <div class="word-title">${w.word || ""}</div>
-      <div class="meta">${w.pronunciation || ""} · ${w.partOfSpeech || ""} · ${w.difficulty || ""}</div>
+      <div class="meta">${w.pronunciation || ""} · ${w.partOfSpeech || ""}</div>
       <div class="label">Meaning</div>
       <p>${w.meaning || ""}</p>
       <div class="label">Explanation</div>
       <p>${w.explanation || ""}</p>
       <div class="label">Examples</div>
-      <ol class="example-list">${(w.examples||[]).map(e => `<li>${e}</li>`).join("")}</ol>
-      ${w.synonyms?.length ? `<div class="label">Synonyms</div><div class="tags">${w.synonyms.map(s=>`<span class="tag">${s}</span>`).join("")}</div>` : ""}
-      ${w.antonyms?.length ? `<div class="label">Antonyms</div><div class="tags">${w.antonyms.map(s=>`<span class="tag">${s}</span>`).join("")}</div>` : ""}
+      <ol class="example-list">${(w.examples || []).map(e => `<li>${e}</li>`).join("")}</ol>
+      ${w.synonyms?.length ? `<div class="label">Synonyms</div><div class="tags">${w.synonyms.map(s => `<span class="tag">${s}</span>`).join("")}</div>` : ""}
+      ${w.antonyms?.length ? `<div class="label">Antonyms</div><div class="tags">${w.antonyms.map(s => `<span class="tag">${s}</span>`).join("")}</div>` : ""}
       ${w.seenAt ? `<p style="color:#aaa;font-size:12px;margin-top:12px;">Seen: ${new Date(w.seenAt).toLocaleString()}</p>` : ""}
     </div>
   `).join("")}
